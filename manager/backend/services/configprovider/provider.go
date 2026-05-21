@@ -116,7 +116,7 @@ func isManagedProviderType(configType string) bool {
 func defaultProvider(configType string) string {
 	switch normalizeToken(configType) {
 	case "vad":
-		return "ten_vad"
+		return "silero_vad"
 	case "asr":
 		return "funasr"
 	case "llm":

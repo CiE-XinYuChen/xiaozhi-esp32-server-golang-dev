@@ -17,7 +17,6 @@
   },
   "vad": {
     "provider": "ten_vad",
-    "pool_size": 20,
     "threshold": 0.3,
     "silero_vad":{
       "model_path": "models/vad/silero_vad/silero_vad.onnx",
