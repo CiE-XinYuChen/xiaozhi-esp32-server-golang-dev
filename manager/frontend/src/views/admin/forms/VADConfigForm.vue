@@ -3,6 +3,7 @@
     <el-form-item label="提供商" prop="provider">
       <el-select v-model="model.provider" placeholder="请选择提供商" style="width: 100%">
         <el-option label="TEN VAD" value="ten_vad" />
+        <el-option label="Silero VAD" value="silero_vad" />
       </el-select>
     </el-form-item>
     <el-form-item label="配置名称" prop="name">

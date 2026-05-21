@@ -45,7 +45,7 @@ func TestNormalizeProviderInfersKnownProviderInsteadOfConfigID(t *testing.T) {
 			configType: "vad",
 			configID:   "custom_vad",
 			data:       map[string]interface{}{},
-			want:       "silero_vad",
+			want:       "ten_vad",
 		},
 	}
 
