@@ -3,8 +3,10 @@ package silero_vad
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	. "xiaozhi-esp32-server-golang/internal/domain/vad/inter"
@@ -22,6 +24,11 @@ var defaultVADConfig = map[string]interface{}{
 	"intra_op_num_threads":    1,
 	"inter_op_num_threads":    1,
 }
+
+const (
+	sourceSileroVADModelPath  = "config/models/vad/silero_vad.onnx"
+	releaseSileroVADModelPath = "models/vad/silero_vad.onnx"
+)
 
 type runtimeKey struct {
 	modelPath         string
@@ -66,6 +73,11 @@ func NewSileroVAD(config map[string]interface{}) (*SileroVAD, error) {
 	if modelPath == "" {
 		return nil, errors.New("缺少模型路径配置")
 	}
+	resolvedModelPath, err := resolveModelPath(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	modelPath = resolvedModelPath
 
 	threshold := getFloat32(cfg, "threshold", 0.5)
 	silenceMs := getDurationMs(cfg, "min_silence_duration_ms", "min_silence_duration", 100)
@@ -302,6 +314,80 @@ func releaseRuntime(key runtimeKey) error {
 	runtimeMu.Unlock()
 
 	return shared.runtime.Destroy()
+}
+
+func resolveModelPath(modelPath string) (string, error) {
+	modelPath = strings.TrimSpace(modelPath)
+	if modelPath == "" {
+		return "", errors.New("缺少模型路径配置")
+	}
+
+	candidates := buildModelPathCandidates(modelPath, modelPathSearchRoots()...)
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("模型文件不存在: %s (已尝试: %s)", modelPath, strings.Join(candidates, ", "))
+}
+
+func buildModelPathCandidates(modelPath string, roots ...string) []string {
+	modelPath = strings.TrimSpace(modelPath)
+	if modelPath == "" {
+		return nil
+	}
+
+	cleanedPath := filepath.Clean(filepath.FromSlash(modelPath))
+	if filepath.IsAbs(cleanedPath) {
+		return []string{cleanedPath}
+	}
+
+	variants := []string{cleanedPath}
+	switch cleanedPath {
+	case filepath.Clean(filepath.FromSlash(sourceSileroVADModelPath)):
+		variants = append(variants, filepath.Clean(filepath.FromSlash(releaseSileroVADModelPath)))
+	case filepath.Clean(filepath.FromSlash(releaseSileroVADModelPath)):
+		variants = append(variants, filepath.Clean(filepath.FromSlash(sourceSileroVADModelPath)))
+	}
+
+	if len(roots) == 0 {
+		roots = []string{""}
+	}
+
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, len(roots)*len(variants))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		for _, variant := range variants {
+			candidate := variant
+			if root != "" {
+				candidate = filepath.Join(root, variant)
+			}
+			candidate = filepath.Clean(candidate)
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func modelPathSearchRoots() []string {
+	roots := make([]string, 0, 2)
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		roots = append(roots, cwd)
+	}
+	if executablePath, err := os.Executable(); err == nil && executablePath != "" {
+		roots = append(roots, filepath.Dir(executablePath))
+	}
+	if len(roots) == 0 {
+		roots = append(roots, "")
+	}
+	return roots
 }
 
 func withDefaults(config map[string]interface{}) map[string]interface{} {
