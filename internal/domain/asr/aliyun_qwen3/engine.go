@@ -114,7 +114,6 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 	header := make(http.Header)
 	header.Add("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 	header.Add("OpenAI-Beta", "realtime=v1")
-	var err error
 
 	// Lazy connect: defer websocket dialing until the first audio chunk arrives.
 	log.Debugf("[aliyun_qwen3] lazy connect enabled: websocket will be created on first audio chunk")
@@ -151,7 +150,23 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 		sendErrMu.Unlock()
 	}
 
+	var resultMu sync.Mutex
+	var resultClosed bool
+	closeResults := func() {
+		resultMu.Lock()
+		defer resultMu.Unlock()
+		if !resultClosed {
+			close(resultChan)
+			resultClosed = true
+		}
+	}
+
 	sendResult := func(r types.StreamingResult) {
+		resultMu.Lock()
+		defer resultMu.Unlock()
+		if resultClosed {
+			return
+		}
 		if !r.IsFinal {
 			select {
 			case resultChan <- r:
@@ -205,7 +220,6 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 			a.connMu.Unlock()
 			conn = dialConn
 			log.Debugf("[aliyun_qwen3] websocket connected")
-			log.Debugf("[aliyun_qwen3] session.update skipped (optional)")
 			close(connectReady)
 		})
 		connectErrMu.Lock()
@@ -230,7 +244,7 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 	// Start receiver goroutine.
 	go func() {
 		defer closeDone()
-		defer close(resultChan)
+		defer closeResults()
 
 		sessionFinished := false
 
@@ -379,11 +393,62 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 		unlock()
 	}()
 
-	// Start sender goroutine without waiting for session.updated.
+	sendSessionUpdate := func() error {
+		if conn == nil {
+			return fmt.Errorf("websocket connection is not ready")
+		}
+		updateEvent := NewSessionUpdateEvent(a.config)
+		updateBytes, err := json.Marshal(updateEvent)
+		if err != nil {
+			return fmt.Errorf("marshal session.update failed: %w", err)
+		}
+		log.Debugf("[aliyun_qwen3] sending session.update, auto_end=%v", a.config.AutoEnd)
+		if err := conn.WriteMessage(websocket.TextMessage, updateBytes); err != nil {
+			return fmt.Errorf("send session.update failed: %w", err)
+		}
+		log.Debugf("[aliyun_qwen3] session.update sent")
+
+		updateWait := a.config.Timeout
+		if updateWait <= 0 {
+			updateWait = 10 * time.Second
+		}
+		timer := time.NewTimer(updateWait)
+		defer func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}()
+
+		select {
+		case <-sessionUpdatedChan:
+			log.Debugf("[aliyun_qwen3] session.updated confirmed, starting sender goroutine")
+			return nil
+		case <-timer.C:
+			return fmt.Errorf("wait session.updated timeout after %s", updateWait)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			sendErrMu.Lock()
+			localErr := sendErr
+			sendErrMu.Unlock()
+			if localErr == nil {
+				localErr = fmt.Errorf("session ended before session.updated")
+			}
+			return localErr
+		}
+	}
+
+	// Start sender goroutine. The websocket and session.update are created on
+	// the first audio chunk to keep the lazy-connect behavior from this branch.
 	select {
 	case <-ctx.Done():
 		log.Debugf("[aliyun_qwen3] context cancelled before sending audio")
-		a.resetConn(conn)
+		if conn != nil {
+			a.resetConn(conn)
+		}
 		closeDone()
 		return nil, ctx.Err()
 	default:
@@ -515,6 +580,19 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 							AsrType:     constants.AsrTypeAliyunQwen3,
 							RetryReason: classifyAliyunQwen3RetryReason(err),
 						})
+						return
+					}
+					if err := sendSessionUpdate(); err != nil {
+						recordSendErr(err)
+						sendResult(types.StreamingResult{
+							Error:       err,
+							IsFinal:     true,
+							AsrType:     constants.AsrTypeAliyunQwen3,
+							RetryReason: classifyAliyunQwen3RetryReason(err),
+						})
+						if conn != nil {
+							a.resetConn(conn)
+						}
 						return
 					}
 				}

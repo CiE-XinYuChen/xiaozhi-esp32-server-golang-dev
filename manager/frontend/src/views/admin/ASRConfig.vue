@@ -158,6 +158,7 @@ const form = reactive({
     model: 'fun-asr-realtime',
     format: 'pcm',
     sample_rate: 16000,
+    language_hints: ['zh'],
     vocabulary_id: '',
     disfluency_removal_enabled: false,
     timeout: 30
@@ -566,6 +567,7 @@ const resetForm = () => {
     model: 'fun-asr-realtime',
     format: 'pcm',
     sample_rate: 16000,
+    language_hints: ['zh'],
     vocabulary_id: '',
     disfluency_removal_enabled: false,
     timeout: 30
