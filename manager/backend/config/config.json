@@ -6,10 +6,10 @@
   "database": {
     "type": "mysql",
     "mysql": {
-      "host": "192.168.208.214",
+      "host": "127.0.0.1",
       "port": 3306,
       "username": "root",
-      "password": "mysql",
+      "password": "",
       "database": "xiaozhi_admin_test"
     },
     "sqlite": {
